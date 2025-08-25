@@ -1,0 +1,286 @@
+# =============================================================================
+# Centauri Carbon Heater Controller
+# ESP32-based PID temperature controller with OLED display
+# =============================================================================
+
+esphome:
+  name: cc-chamber-heater
+  friendly_name: Centauri Carbon Heater Controller
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+web_server:
+  port: 80
+  version: 2
+  local: true
+
+ota:
+  - platform: esphome
+
+# =============================================================================
+# HARDWARE PLATFORM
+# =============================================================================
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# =============================================================================
+# LOGGING & DEBUGGING
+# =============================================================================
+
+logger:
+  level: VERBOSE
+  initial_level: INFO
+  logs:
+    pid.autotune: DEBUG
+
+# =============================================================================
+# COMMUNICATION BUSES
+# =============================================================================
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+  frequency: 400kHz
+
+one_wire:
+  - platform: gpio
+    pin: GPIO4
+
+# =============================================================================
+# GPIO OUTPUTS
+# =============================================================================
+
+output:
+  # Status LED
+  - platform: gpio
+    pin: GPIO23
+    id: led
+
+  # Heater control (PWM via sigma-delta)
+  - platform: sigma_delta_output
+    update_interval: 1s
+    id: heater
+    pin: GPIO32
+
+# =============================================================================
+# SENSORS
+# =============================================================================
+
+sensor:
+  # Temperature sensor
+  - id: chamber_temp
+    name: Chamber Temperature
+    platform: dallas_temp
+    update_interval: 1s
+    accuracy_decimals: 1
+
+  # PID output monitoring
+  - platform: pid
+    name: "PID Heat Output"
+    id: pid_heat_sensor
+    type: HEAT
+
+# =============================================================================
+# VISUAL INDICATORS
+# =============================================================================
+
+light:
+  - platform: status_led
+    name: Status
+    output: led
+
+# =============================================================================
+# DISPLAY SYSTEM
+# =============================================================================
+
+# Global state for display timeout management
+globals:
+  - id: display_timeout_active
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+# Display timeout logic
+# Blanks display after 10 minutes when PID is off
+interval:
+  - interval: 1s
+    then:
+      # Start timeout countdown when PID turns off
+      - if:
+          condition:
+            and:
+              - lambda: "return id(chamber_pid).mode == CLIMATE_MODE_OFF;"
+              - lambda: "return !id(display_timeout_active);"
+          then:
+            - delay: 600s # 10 minutes
+            - if:
+                condition:
+                  lambda: "return id(chamber_pid).mode == CLIMATE_MODE_OFF;"
+                then:
+                  - lambda: "id(display_timeout_active) = true;"
+                  - logger.log: "Display timeout activated - switching to blank page"
+
+      # Reset timeout when PID reactivates
+      - if:
+          condition:
+            and:
+              - lambda: "return id(chamber_pid).mode != CLIMATE_MODE_OFF;"
+              - lambda: "return id(display_timeout_active);"
+          then:
+            - lambda: "id(display_timeout_active) = false;"
+            - logger.log: "PID turned on - display reactivated"
+
+# Font definitions
+font:
+  - id: tiny_font
+    file:
+      type: gfonts
+      family: Tiny5
+    size: 6
+  - id: main_font
+    file:
+      type: gfonts
+      family: Golos Text
+    size: 12
+  - id: bold_font
+    file:
+      type: gfonts
+      family: Golos Text
+      weight: bold
+    size: 12
+  - id: large_font
+    file:
+      type: gfonts
+      family: Golos Text
+      weight: bold
+    size: 36
+
+# Display configuration
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    update_interval: 1s
+    pages:
+      - id: main_page
+        lambda: |-
+          // Exit early if display should be blank
+          if (id(display_timeout_active)) {
+            return;
+          }
+
+          // =================================================================
+          // HEADER ROW: Target temperature and power indicator
+          // =================================================================
+
+          // Target temperature (left aligned)
+          if (id(chamber_pid).mode != CLIMATE_MODE_OFF &&
+              id(chamber_pid).target_temperature > 0) {
+            it.printf(0, 0, id(main_font), "Target: %.1f°C",
+                     id(chamber_pid).target_temperature);
+          } else {
+            it.printf(0, 0, id(main_font), "Target: --.-°C");
+          }
+
+          // Power level indicator (right aligned, inverted)
+          const int POWER_BOX_WIDTH = 35;
+          const int POWER_BOX_HEIGHT = 12;
+          const int power_box_x = 128 - POWER_BOX_WIDTH;
+
+          if (id(pid_heat_sensor).has_state()) {
+            float power_level = id(pid_heat_sensor).state;
+            it.filled_rectangle(power_box_x, 0, POWER_BOX_WIDTH, POWER_BOX_HEIGHT);
+            it.printf(power_box_x + POWER_BOX_WIDTH/2, -1, id(main_font),
+                     COLOR_OFF, TextAlign::TOP_CENTER, "%3.0f%%", power_level);
+          } else {
+            it.filled_rectangle(power_box_x, 0, POWER_BOX_WIDTH, POWER_BOX_HEIGHT);
+            it.printf(power_box_x + POWER_BOX_WIDTH/2, -1, id(main_font),
+                     COLOR_OFF, TextAlign::TOP_CENTER, "--%");
+          }
+
+          // =================================================================
+          // MAIN AREA: Current temperature reading
+          // =================================================================
+
+          const int HEADER_HEIGHT = 16;
+          const int remaining_height = 64 - HEADER_HEIGHT;
+          const int temp_y = HEADER_HEIGHT + (remaining_height / 2) - 18;
+
+          if (id(chamber_temp).has_state()) {
+            // Large temperature display (centered)
+            it.printf(64, temp_y, id(large_font), TextAlign::TOP_CENTER,
+                     "%.1f", id(chamber_temp).state);
+            // Degree symbol (top right of main area)
+            it.printf(126, 18, id(main_font), TextAlign::TOP_RIGHT, "°C");
+          } else {
+            // Sensor offline
+            it.printf(64, temp_y, id(large_font), TextAlign::TOP_CENTER, "--.-");
+            it.printf(126, 18, id(main_font), TextAlign::TOP_RIGHT, "°C");
+          }
+
+# =============================================================================
+# CLIMATE CONTROL
+# =============================================================================
+
+climate:
+  - id: chamber_pid
+    name: Chamber Heater
+    icon: mdi:thermometer-lines
+    platform: pid
+    sensor: chamber_temp
+    heat_output: heater
+
+    # Operating range
+    visual:
+      min_temperature: 20°C
+      max_temperature: 60°C
+    default_target_temperature: 20°C
+
+    # PID parameters - Start with PI control for heater-only systems
+    # Autotuning with asymmetric heating/cooling often produces excessive Kd
+    # For chamber heaters, PI control is typically more stable than PID
+    control_parameters:
+      kp: 0.65481 # Proportional gain (from Z-N PI autotune)
+      ki: 0.00374 # Integral gain (from Z-N PI autotune)
+      kd: 0.00000 # Derivative gain (disabled for noise immunity)
+
+
+    # Alternative parameters from autotune (if PI control insufficient):
+    # "No Overshoot PID": kp: 0.29103, ki: 0.00277, kd: 19.12602
+    # "Standard Z-N PID": kp: 0.87308, ki: 0.00830, kd: 22.95123
+    #
+    # TUNING NOTES:
+    # - Heater-only systems have asymmetric heating/cooling rates
+    # - This confuses relay autotune algorithms, producing high Kd values
+    # - Start with PI control (kd: 0.00000) for best stability
+    # - If derivative action needed, use "No Overshoot" values and reduce Kd by 50-75%
+    # - Consider reducing positive_output and re-running autotune for better symmetry
+# =============================================================================
+# HARDWARE CONNECTIONS
+# =============================================================================
+# GPIO4:  Dallas temperature sensor (DS18B20)
+# GPIO21: I2C SDA (OLED display)
+# GPIO22: I2C SCL (OLED display)
+# GPIO23: Status LED
+# GPIO32: Heater control output (sigma-delta PWM)
+#
+# DISPLAY BEHAVIOR
+# - Auto-blanks after 10 minutes when PID controller is OFF
+# - Immediately reactivates when PID controller turns ON
+#
+# PID AUTOTUNE RESULTS & RECOMMENDATIONS
+# - Relay autotune with heater-only systems produces asymmetric oscillations
+# - This leads to inaccurate parameters, especially excessive derivative gain
+# - PI control (no derivative) is recommended for chamber heating applications
+# - Temperature sensors are noisy; high Kd amplifies noise and causes instability
+# - Chamber heating is slow/stable process that doesn't need aggressive derivative action
+# =============================================================================

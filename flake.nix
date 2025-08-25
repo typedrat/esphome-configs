@@ -56,6 +56,8 @@
         devshells.default = {
           packages = with pkgs; [
             esphome
+            minicom
+            sops
           ];
         };
 
