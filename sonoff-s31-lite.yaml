@@ -1,0 +1,136 @@
+# =============================================================================
+# Sonoff S31 Lite
+# ESP8285 smart plug (relay + button, no power monitoring)
+# =============================================================================
+# The "Lite" omits the CSE7766 energy-monitoring chip found on the full S31,
+# so this is a plain switched outlet.
+#
+# First flash requires the serial header: open the case, connect a 3.3V UART,
+# and hold the button while powering on to enter the bootloader. tuya-convert
+# does not work on this device.
+# =============================================================================
+
+esphome:
+  name: sonoff-s31-lite
+  friendly_name: Sonoff S31 Lite
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Keep the plug reachable to toggle it locally if the network drops
+  ap:
+    ssid: "S31 Lite Fallback"
+    password: !secret wifi_password
+
+captive_portal:
+
+api:
+
+web_server:
+  port: 80
+  version: 2
+  local: true
+
+ota:
+  - platform: esphome
+
+# =============================================================================
+# HARDWARE PLATFORM
+# =============================================================================
+
+esp8266:
+  board: esp01_1m
+
+# =============================================================================
+# LOGGING & DEBUGGING
+# =============================================================================
+
+logger:
+  # GPIO1/GPIO3 (UART) are broken out to the header; free them for the log
+  baud_rate: 0
+
+# =============================================================================
+# TIME
+# =============================================================================
+
+time:
+  - platform: sntp
+
+# =============================================================================
+# GPIO OUTPUTS
+# =============================================================================
+
+output:
+  # Green status LED (active low)
+  - platform: gpio
+    pin:
+      number: GPIO13
+      inverted: true
+    id: green_led
+
+# =============================================================================
+# CONTROLS
+# =============================================================================
+
+switch:
+  # Relay. The blue outlet LED is wired in parallel, so it tracks relay state.
+  - platform: gpio
+    name: Relay
+    pin: GPIO12
+    id: relay
+    icon: mdi:power-socket-us
+    restore_mode: RESTORE_DEFAULT_OFF
+
+binary_sensor:
+  # Front push button toggles the relay
+  - platform: gpio
+    id: button
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    on_press:
+      - switch.toggle: relay
+
+# =============================================================================
+# VISUAL INDICATORS
+# =============================================================================
+
+light:
+  - platform: status_led
+    name: Status LED
+    output: green_led
+
+# =============================================================================
+# DIAGNOSTIC SENSORS
+# =============================================================================
+
+sensor:
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+
+  - platform: uptime
+    name: Uptime
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+    ssid:
+      name: Connected SSID
+
+# =============================================================================
+# HARDWARE CONNECTIONS
+# =============================================================================
+# GPIO0:  Push button (active low, internal pull-up)
+# GPIO12: Relay + blue outlet LED
+# GPIO13: Green status LED (active low)
+# GPIO1:  UART TX header pin (external sensors)
+# GPIO3:  UART RX header pin (external sensors)
+# =============================================================================
