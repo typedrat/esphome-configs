@@ -1,0 +1,15 @@
+# =============================================================================
+# Chamber Heater Plug
+# Sonoff S31 Lite switching the Centauri Carbon chamber heater
+# =============================================================================
+# Renames the reusable S31 Lite base for this outlet's job. All hardware and
+# behavior live in sonoff-s31-lite.yaml; only the labels change here.
+# =============================================================================
+
+substitutions:
+  name: cc-chamber-heater-plug
+  friendly_name: Chamber Heater Plug
+  relay_name: Chamber Heater
+
+packages:
+  base: !include sonoff-s31-lite.yaml

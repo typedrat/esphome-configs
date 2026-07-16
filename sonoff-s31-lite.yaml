@@ -10,9 +10,16 @@
 # does not work on this device.
 # =============================================================================
 
-esphome:
+# Defaults for standalone use; override these from an including file (see
+# packages:) to repurpose the plug without copying the whole config.
+substitutions:
   name: sonoff-s31-lite
   friendly_name: Sonoff S31 Lite
+  relay_name: Relay
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
 
 # =============================================================================
 # CONNECTIVITY
@@ -24,7 +31,7 @@ wifi:
 
   # Keep the plug reachable to toggle it locally if the network drops
   ap:
-    ssid: "S31 Lite Fallback"
+    ssid: "${friendly_name} Fallback"
     password: !secret wifi_password
 
 captive_portal:
@@ -80,7 +87,7 @@ output:
 switch:
   # Relay. The blue outlet LED is wired in parallel, so it tracks relay state.
   - platform: gpio
-    name: Relay
+    name: ${relay_name}
     pin: GPIO12
     id: relay
     icon: mdi:power-socket-us
