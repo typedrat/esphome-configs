@@ -52,14 +52,11 @@ mqtt:
             if (p == std::string::npos) return;
             float v = atof(x.c_str() + p + 8);
             v = v < 0 ? 0 : (v > 1 ? 1 : v);
-            const float pct = v * 100.0f;
-            const float cur = id(heater_power).state;
-            if (std::isnan(cur) || fabsf(pct - cur) >= 0.5f) {
-              id(heater_power).make_call().set_value(pct).perform();
-            }
-            // The write above clears mqtt_driven through on_value; claim it back
-            id(mqtt_driven) = true;
+            id(klipper_level) = v * 100.0f;
             id(last_level_ms) = millis();
+            // Applied here for responsiveness; the interval below re-asserts it,
+            // since this topic only fires when Klipper's PID output moves
+            id(apply_klipper_level)->execute();
 
     - topic: ${klipper_state}/temperature
       then:
@@ -79,14 +76,30 @@ mqtt:
             id(chamber_target).publish_state(atof(x.c_str() + p + 8));
 
 globals:
-  # Timestamp of the last level Klipper sent, and whether the level currently
-  # standing came from it. A level set by hand is nobody's to time out.
+  # Timestamp of the last word from Klipper, the duty cycle it last asked for,
+  # and whether the level standing now came from it. A level set by hand while
+  # Klipper is quiet is nobody's to time out.
   - id: last_level_ms
     type: uint32_t
     initial_value: "0"
+  - id: klipper_level
+    type: float
+    initial_value: "0.0f"
   - id: mqtt_driven
     type: bool
     initial_value: "false"
+
+# Writing the number clears mqtt_driven through on_value, so every path that
+# sets a Klipper-owned level has to claim it back afterwards.
+script:
+  - id: apply_klipper_level
+    then:
+      - lambda: |-
+          const float cur = id(heater_power).state;
+          if (std::isnan(cur) || fabsf(id(klipper_level) - cur) >= 0.5f) {
+            id(heater_power).make_call().set_value(id(klipper_level)).perform();
+          }
+          id(mqtt_driven) = true;
 
 # Klipper's own view of the chamber, mirrored onto the plug so the heater and
 # the temperatures it answers to appear as one device.
@@ -175,15 +188,23 @@ binary_sensor:
 interval:
   - interval: 5s
     then:
-      # Klipper stopped talking: drop the heater. Zeroing the number hands
-      # ownership back, so this fires once rather than every tick.
+      # While Klipper is talking it owns the setpoint: re-assert it, or a manual
+      # change would stand until its PID output happened to move. Once it goes
+      # quiet, drop the heater and leave the number free to be set by hand.
       - if:
           condition:
-            lambda: "return id(mqtt_driven) && millis() - id(last_level_ms) > 60000;"
+            lambda: |-
+              return id(last_level_ms) != 0 && millis() - id(last_level_ms) <= 60000;
           then:
-            - number.set:
-                id: heater_power
-                value: 0
+            - script.execute: apply_klipper_level
+          else:
+            - if:
+                condition:
+                  lambda: "return id(mqtt_driven);"
+                then:
+                  - number.set:
+                      id: heater_power
+                      value: 0
 
       # Green LED lit while Klipper is actually talking to us. Driving the
       # status light instead of the raw output leaves ESPHome's own warning and
