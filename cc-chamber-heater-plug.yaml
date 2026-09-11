@@ -4,7 +4,7 @@
 # =============================================================================
 # Renames the reusable S31 Lite base for this outlet's job, then trades its
 # plain on/off relay for a 0-100% power control: sigma-delta modulation over a
-# 30s window, driven either by Klipper over MQTT or by hand.
+# 30s window, driven either by Klipper's PID over MQTT or by hand.
 #
 # The relay is mechanical, so the window is long on purpose. Worst-case duty
 # works out to ~2880 operations/day, which the contacts can sustain for years.
@@ -15,9 +15,10 @@ substitutions:
   name: cc-chamber-heater-plug
   friendly_name: Chamber Heater Plug
   relay_name: Chamber Heater
-  # Moonraker's instance_name plus the macro's topic, shared by the level
-  # subscription and the telemetry sensors below
-  klipper_topic: klipper/centauri_carbon/chamber_heater
+  # Moonraker mirrors each field of Klipper's chamber heater object under here.
+  # This comes from Moonraker's own subscription, not from a gcode macro, so it
+  # keeps arriving while a blocking command like M191 holds the gcode queue.
+  klipper_state: "klipper/centauri_carbon/klipper/state/heater_generic chamber"
 
 packages:
   base: !include sonoff-s31-lite.yaml
@@ -38,24 +39,44 @@ mqtt:
   # already fails the heater safe, and a reboot loop would only add relay wear.
   reboot_timeout: 0s
 
-  # Klipper publishes the wanted duty cycle as 0.0-1.0, every 2s whether or not
-  # it changed, so only write the number on a real move: an unchanged write
-  # still echoes a state to MQTT. The timestamp takes every message though,
-  # since the republishing is also the watchdog's heartbeat.
+  # Every field arrives as {"eventtime":…,"value":…}. Moonraker publishes a
+  # field only when it changes, so power can sit silent for minutes while
+  # temperature keeps ticking every 2s.
   on_message:
-    topic: ${klipper_topic}/level
-    then:
-      - lambda: |-
-          float v = atof(x.c_str());
-          v = v < 0 ? 0 : (v > 1 ? 1 : v);
-          const float pct = v * 100.0f;
-          const float cur = id(heater_power).state;
-          if (std::isnan(cur) || fabsf(pct - cur) >= 0.5f) {
-            id(heater_power).make_call().set_value(pct).perform();
-          }
-          // The write above clears mqtt_driven through on_value; claim it back
-          id(mqtt_driven) = true;
-          id(last_level_ms) = millis();
+    - topic: ${klipper_state}/power
+      then:
+        - lambda: |-
+            // A null value means the chamber object is gone; atof reads that as
+            // 0, which is the right answer for a heater
+            auto p = x.find("\"value\":");
+            if (p == std::string::npos) return;
+            float v = atof(x.c_str() + p + 8);
+            v = v < 0 ? 0 : (v > 1 ? 1 : v);
+            const float pct = v * 100.0f;
+            const float cur = id(heater_power).state;
+            if (std::isnan(cur) || fabsf(pct - cur) >= 0.5f) {
+              id(heater_power).make_call().set_value(pct).perform();
+            }
+            // The write above clears mqtt_driven through on_value; claim it back
+            id(mqtt_driven) = true;
+            id(last_level_ms) = millis();
+
+    - topic: ${klipper_state}/temperature
+      then:
+        - lambda: |-
+            auto p = x.find("\"value\":");
+            if (p == std::string::npos || x.find("null", p) == p + 8) return;
+            id(chamber_temp).publish_state(atof(x.c_str() + p + 8));
+            // Chamber temperature always drifts, so it is the only field that
+            // reliably proves Klipper is still talking
+            id(last_level_ms) = millis();
+
+    - topic: ${klipper_state}/target
+      then:
+        - lambda: |-
+            auto p = x.find("\"value\":");
+            if (p == std::string::npos || x.find("null", p) == p + 8) return;
+            id(chamber_target).publish_state(atof(x.c_str() + p + 8));
 
 globals:
   # Timestamp of the last level Klipper sent, and whether the level currently
@@ -70,22 +91,22 @@ globals:
 # Klipper's own view of the chamber, mirrored onto the plug so the heater and
 # the temperatures it answers to appear as one device.
 sensor:
-  - platform: mqtt_subscribe
+  - platform: template
     name: Chamber Temperature
     id: chamber_temp
-    topic: ${klipper_topic}/temperature
     unit_of_measurement: "°C"
     device_class: temperature
     state_class: measurement
     accuracy_decimals: 2
+    update_interval: never
 
-  - platform: mqtt_subscribe
+  - platform: template
     name: Chamber Target
     id: chamber_target
-    topic: ${klipper_topic}/target
     unit_of_measurement: "°C"
     device_class: temperature
     accuracy_decimals: 1
+    update_interval: never
 
 # =============================================================================
 # HEATER POWER
