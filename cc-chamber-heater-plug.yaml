@@ -2,14 +2,177 @@
 # Chamber Heater Plug
 # Sonoff S31 Lite switching the Centauri Carbon chamber heater
 # =============================================================================
-# Renames the reusable S31 Lite base for this outlet's job. All hardware and
-# behavior live in sonoff-s31-lite.yaml; only the labels change here.
+# Renames the reusable S31 Lite base for this outlet's job, then trades its
+# plain on/off relay for a 0-100% power control: sigma-delta modulation over a
+# 30s window, driven either by Klipper over MQTT or by hand.
+#
+# The relay is mechanical, so the window is long on purpose. Worst-case duty
+# works out to ~2880 operations/day, which the contacts can sustain for years.
+# The blue outlet LED sits across the relay, so it blinks with the duty cycle.
 # =============================================================================
 
 substitutions:
   name: cc-chamber-heater-plug
   friendly_name: Chamber Heater Plug
   relay_name: Chamber Heater
+  # Moonraker's instance_name plus the macro's topic, shared by the level
+  # subscription and the telemetry sensors below
+  klipper_topic: klipper/centauri_carbon/chamber_heater
 
 packages:
   base: !include sonoff-s31-lite.yaml
+
+# =============================================================================
+# KLIPPER LINK
+# =============================================================================
+
+mqtt:
+  id: mqtt_client
+  broker: iserlohn.lan
+  port: 35550
+  username: esphome
+  password: !secret mqtt_password
+  topic_prefix: esphome/${name}
+
+  # Riding out a broker outage beats rebooting through one: the watchdog below
+  # already fails the heater safe, and a reboot loop would only add relay wear.
+  reboot_timeout: 0s
+
+  # Klipper publishes the wanted duty cycle as 0.0-1.0, every 2s whether or not
+  # it changed, so only write the number on a real move: an unchanged write
+  # still echoes a state to MQTT. The timestamp takes every message though,
+  # since the republishing is also the watchdog's heartbeat.
+  on_message:
+    topic: ${klipper_topic}/level
+    then:
+      - lambda: |-
+          float v = atof(x.c_str());
+          v = v < 0 ? 0 : (v > 1 ? 1 : v);
+          const float pct = v * 100.0f;
+          const float cur = id(heater_power).state;
+          if (std::isnan(cur) || fabsf(pct - cur) >= 0.5f) {
+            id(heater_power).make_call().set_value(pct).perform();
+          }
+          // The write above clears mqtt_driven through on_value; claim it back
+          id(mqtt_driven) = true;
+          id(last_level_ms) = millis();
+
+globals:
+  # Timestamp of the last level Klipper sent, and whether the level currently
+  # standing came from it. A level set by hand is nobody's to time out.
+  - id: last_level_ms
+    type: uint32_t
+    initial_value: "0"
+  - id: mqtt_driven
+    type: bool
+    initial_value: "false"
+
+# Klipper's own view of the chamber, mirrored onto the plug so the heater and
+# the temperatures it answers to appear as one device.
+sensor:
+  - platform: mqtt_subscribe
+    name: Chamber Temperature
+    id: chamber_temp
+    topic: ${klipper_topic}/temperature
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 2
+
+  - platform: mqtt_subscribe
+    name: Chamber Target
+    id: chamber_target
+    topic: ${klipper_topic}/target
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 1
+
+# =============================================================================
+# HEATER POWER
+# =============================================================================
+
+# Heater Power owns the relay now, so it stops being a user-facing entity.
+switch:
+  - id: !extend relay
+    internal: true
+
+output:
+  - platform: sigma_delta_output
+    id: heater_output
+    update_interval: 30s
+    # The relay is internal and the switch component only logs at VERBOSE, so
+    # these are the only trace of the heater actually being driven.
+    turn_on_action:
+      - switch.turn_on: relay
+      - logger.log: "Heater relay closed"
+    turn_off_action:
+      - switch.turn_off: relay
+      - logger.log: "Heater relay opened"
+
+number:
+  - platform: template
+    name: Heater Power
+    id: heater_power
+    icon: mdi:fire
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 1
+    mode: slider
+    optimistic: true
+    # Come up cold after a power cut, as the base relay does
+    restore_value: false
+    initial_value: 0
+    # on_value rather than set_action: this also runs for initial_value, so the
+    # output starts at a known level instead of floating until first command
+    on_value:
+      - output.set_level:
+          id: heater_output
+          level: !lambda "return x / 100.0;"
+      - lambda: "id(mqtt_driven) = false;"
+
+# The front button moves the setpoint instead of the relay; toggling the relay
+# under the modulator would only last until its next cycle.
+binary_sensor:
+  - id: !remove button
+
+  - platform: gpio
+    id: power_button
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    on_press:
+      - number.set:
+          id: heater_power
+          value: !lambda "return id(heater_power).state > 0 ? 0 : 100;"
+
+# =============================================================================
+# WATCHDOG & LINK INDICATOR
+# =============================================================================
+
+interval:
+  - interval: 5s
+    then:
+      # Klipper stopped talking: drop the heater. Zeroing the number hands
+      # ownership back, so this fires once rather than every tick.
+      - if:
+          condition:
+            lambda: "return id(mqtt_driven) && millis() - id(last_level_ms) > 60000;"
+          then:
+            - number.set:
+                id: heater_power
+                value: 0
+
+      # Green LED lit while Klipper is actually talking to us. Driving the
+      # status light instead of the raw output leaves ESPHome's own warning and
+      # error blinking on top; only write on a change, or every tick would
+      # publish a light state.
+      - lambda: |-
+          // last_level_ms 0 means Klipper has not spoken since boot; without
+          // that guard the window around millis() 0 reads as fresh
+          bool linked = id(mqtt_client).is_connected() && id(last_level_ms) != 0 &&
+                        millis() - id(last_level_ms) <= 60000;
+          if (linked != id(status_light).current_values.is_on()) {
+            id(status_light).make_call().set_state(linked).perform();
+          }

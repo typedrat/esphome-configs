@@ -109,7 +109,10 @@ binary_sensor:
 # =============================================================================
 
 light:
+  # Blinks out ESPHome warnings and errors; otherwise a plain binary light an
+  # including config can drive to signal whatever that device cares about.
   - platform: status_led
+    id: status_light
     name: Status LED
     output: green_led
 
