@@ -66,9 +66,11 @@ output:
     pin: GPIO23
     id: led
 
-  # Heater control (PWM via sigma-delta)
+  # Heater control: sigma-delta duty cycle driving a mechanical relay. Every
+  # cycle is a contact operation, so the window stays long; the chamber heats
+  # slowly enough that 30s of resolution costs nothing.
   - platform: sigma_delta_output
-    update_interval: 1s
+    update_interval: 30s
     id: heater
     pin: GPIO32
 
@@ -271,7 +273,7 @@ climate:
 # GPIO21: I2C SDA (OLED display)
 # GPIO22: I2C SCL (OLED display)
 # GPIO23: Status LED
-# GPIO32: Heater control output (sigma-delta PWM)
+# GPIO32: Heater control output (sigma-delta duty cycle, mechanical relay)
 #
 # DISPLAY BEHAVIOR
 # - Auto-blanks after 10 minutes when PID controller is OFF
