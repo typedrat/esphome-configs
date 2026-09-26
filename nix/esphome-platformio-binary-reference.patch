@@ -1,0 +1,13 @@
+diff --git a/esphome/platformio/toolchain.py b/esphome/platformio/toolchain.py
+index 97b32420da..3f0eff7638 100644
+--- a/esphome/platformio/toolchain.py
++++ b/esphome/platformio/toolchain.py
+@@ -322,7 +322,7 @@ def run_platformio_cli(*args, **kwargs) -> str | int:
+         # a user-provided value (or the unmodified path on platforms that
+         # don't need the strip).
+         os.environ["PYTHONEXEPATH"] = python_exe
+-    cmd = [python_exe, "-m", "esphome.platformio.runner"] + list(args)
++    cmd = ["platformio"] + list(args)
+ 
+     # ccache settings go into the subprocess environment only (see
+     # _ccache_env() for why they must not leak into os.environ). A caller

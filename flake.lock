@@ -20,6 +20,23 @@
         "type": "github"
       }
     },
+    "esphome": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789548425,
+        "narHash": "sha256-480otd11EeHJXT6uhc5pBg5k+bjrrCUxD0+6ggLhqxk=",
+        "owner": "esphome",
+        "repo": "esphome",
+        "rev": "c6e4c87e525dd343e470d8dea368957a002f6505",
+        "type": "github"
+      },
+      "original": {
+        "owner": "esphome",
+        "ref": "2026.9.0",
+        "repo": "esphome",
+        "type": "github"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": "nixpkgs-lib"
@@ -87,6 +104,7 @@
     "root": {
       "inputs": {
         "devshell": "devshell",
+        "esphome": "esphome",
         "flake-parts": "flake-parts",
         "flake-root": "flake-root",
         "nixpkgs": "nixpkgs",

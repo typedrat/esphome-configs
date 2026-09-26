@@ -16,6 +16,11 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    esphome = {
+      url = "github:esphome/esphome/2026.9.0";
+      flake = false;
+    };
   };
 
   outputs = inputs @ {flake-parts, ...}:
@@ -37,7 +42,46 @@
         config,
         pkgs,
         ...
-      }: {
+      }: let
+        # nixpkgs' esphome with its source swapped for the `esphome` input.
+        # Dependencies come from the derivation's own Python set so they agree
+        # with its package overrides (e.g. paho-mqtt 1.x).
+        esphome = pkgs.esphome.overridePythonAttrs (old: let
+          py = pkgs.esphome.dashboard.pythonModule.pkgs;
+          version = builtins.head (builtins.match ''.*__version__ = "([^"]+)".*'' (builtins.readFile "${inputs.esphome}/esphome/const.py"));
+        in {
+          inherit version;
+          src = inputs.esphome;
+
+          # Run the platformio and esptool binaries directly: both live outside
+          # esphome's Python env.
+          patches = [
+            ./nix/esphome-esp32-post-build-esptool-reference.patch
+            ./nix/esphome-platformio-binary-reference.patch
+          ];
+
+          postPatch = ''
+            sed -i -E \
+              -e 's/"setuptools==[^"]*"/"setuptools"/' \
+              -e 's/"wheel[^"]*"/"wheel"/' \
+              pyproject.toml
+          '';
+
+          dependencies =
+            old.dependencies
+            ++ (with py; [
+              aiohappyeyeballs
+              filelock
+              ninja
+              platformdirs
+            ]);
+
+          # nixpkgs' disabled-test list is written for its own, older release.
+          doCheck = false;
+
+          meta = old.meta // {changelog = "https://github.com/esphome/esphome/releases/tag/${version}";};
+        });
+      in {
         treefmt.config = {
           inherit (config.flake-root) projectRootFile;
           package = pkgs.treefmt;
@@ -54,10 +98,10 @@
         };
 
         devshells.default = {
-          packages = with pkgs; [
+          packages = [
             esphome
-            minicom
-            sops
+            pkgs.minicom
+            pkgs.sops
           ];
         };
 
