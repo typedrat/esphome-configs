@@ -1,0 +1,102 @@
+# =============================================================================
+# ESP32-C3 433MHz Bridge
+# ESP32-C3 Super Mini with a CC1101 receiver and SSD1306 OLED
+# =============================================================================
+# CC1101 wiring: SPI on GPIO7/8/9 with CS on GPIO6, GDO0 (demodulated data)
+# on GPIO5, GDO2 (carrier sense) on GPIO10.
+# =============================================================================
+
+esphome:
+  name: esp32-c3-433mhz-bridge
+  friendly_name: ESP32-C3 433MHz bridge
+
+# Adds the gdo2_mode option used below.
+external_components:
+  - source: github://typedrat/esphome@typedrat/cc1101-gdo2-mode-2026.9
+    components: [cc1101]
+
+# =============================================================================
+# CONNECTIVITY
+# =============================================================================
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "ESP32-C3 433MHz Fallback"
+    password: !secret rf_bridge_ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret rf_bridge_api_key
+
+ota:
+  - platform: esphome
+
+# =============================================================================
+# HARDWARE PLATFORM
+# =============================================================================
+
+esp32:
+  variant: esp32c3
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+
+# =============================================================================
+# LOGGING & DEBUGGING
+# =============================================================================
+
+logger:
+
+# =============================================================================
+# BUSES
+# =============================================================================
+
+i2c:
+  - id: i2c_1
+    scl: GPIO20
+    sda: GPIO21
+
+spi:
+  - id: spi_1
+    clk_pin: GPIO7
+    miso_pin: GPIO9
+    mosi_pin: GPIO8
+    type: single
+
+# =============================================================================
+# DISPLAY
+# =============================================================================
+
+display:
+  - platform: ssd1306_i2c
+    id: display_ssd1306_i2c_1
+    i2c_id: i2c_1
+    model: SSD1306_128X64
+
+# =============================================================================
+# RADIO
+# =============================================================================
+
+# Receive-only, so gdo0_pin is left unset: the component only uses it to flip
+# GDO0 into an output for transmitting.
+cc1101:
+  - id: cc1101_1
+    cs_pin: GPIO6
+    gdo2_mode: "Carrier Sense"
+
+# Bring-up aids for tuning the carrier-sense threshold against real traffic.
+remote_receiver:
+  pin: GPIO5
+  dump: raw
+  idle: 10ms
+  buffer_size: 10kb
+
+binary_sensor:
+  - platform: gpio
+    name: "Carrier Sense"
+    pin: GPIO10
