@@ -47,7 +47,7 @@
         # Dependencies come from the derivation's own Python set so they agree
         # with its package overrides (e.g. paho-mqtt 1.x).
         esphome = pkgs.esphome.overridePythonAttrs (old: let
-          py = pkgs.esphome.dashboard.pythonModule.pkgs;
+          py = (builtins.head old.dependencies).pythonModule.pkgs;
           version = builtins.head (builtins.match ''.*__version__ = "([^"]+)".*'' (builtins.readFile "${inputs.esphome}/esphome/const.py"));
         in {
           inherit version;
@@ -67,17 +67,11 @@
               pyproject.toml
           '';
 
-          # The native ESP-IDF build imports platformio as a library to resolve
-          # registry dependencies, so the module has to be importable even though
-          # builds still run the wrapped platformio binary.
           dependencies =
             old.dependencies
             ++ (with py; [
               aiohappyeyeballs
-              filelock
               ninja
-              platformdirs
-              (toPythonModule pkgs.platformio-core)
             ]);
 
           # nixpkgs' disabled-test list is written for its own, older release.
