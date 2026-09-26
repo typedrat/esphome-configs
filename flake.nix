@@ -67,6 +67,9 @@
               pyproject.toml
           '';
 
+          # The native ESP-IDF build imports platformio as a library to resolve
+          # registry dependencies, so the module has to be importable even though
+          # builds still run the wrapped platformio binary.
           dependencies =
             old.dependencies
             ++ (with py; [
@@ -74,6 +77,7 @@
               filelock
               ninja
               platformdirs
+              (toPythonModule pkgs.platformio-core)
             ]);
 
           # nixpkgs' disabled-test list is written for its own, older release.
