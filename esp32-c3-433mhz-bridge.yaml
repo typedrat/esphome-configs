@@ -10,10 +10,14 @@ esphome:
   name: esp32-c3-433mhz-bridge
   friendly_name: ESP32-C3 433MHz bridge
 
-# Adds the gdo2_mode option used below.
 external_components:
+  # Adds the gdo2_mode option used below.
   - source: github://typedrat/esphome@typedrat/cc1101-gdo2-mode-2026.9
     components: [cc1101]
+  - source:
+      type: local
+      path: /home/awilliams/Development/esphome-rtl433/components
+    components: [rtl_433]
 
 # =============================================================================
 # CONNECTIVITY
@@ -53,6 +57,29 @@ esp32:
 logger:
 
 # =============================================================================
+# DIAGNOSTIC SENSORS
+# =============================================================================
+
+binary_sensor:
+  - platform: status
+    name: Status
+
+sensor:
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+
+  - platform: uptime
+    name: Uptime
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: IP Address
+    ssid:
+      name: Connected SSID
+
+# =============================================================================
 # BUSES
 # =============================================================================
 
@@ -88,15 +115,19 @@ cc1101:
   - id: cc1101_1
     cs_pin: GPIO6
     gdo2_mode: "Carrier Sense"
+    # Full DVGA gain and the most sensitive carrier-sense threshold still enabled
+    # (-8 disables it); the defaults kept GDO0/GDO2 silent on a quiet band.
+    carrier_sense_abs_thr: -7
+    max_dvga_gain: "Default"
 
-# Bring-up aids for tuning the carrier-sense threshold against real traffic.
-remote_receiver:
-  pin: GPIO5
-  dump: raw
-  idle: 10ms
-  buffer_size: 10kb
-
-binary_sensor:
-  - platform: gpio
-    name: "Carrier Sense"
-    pin: GPIO10
+rtl_433:
+  receivers:
+    - id: rtl_ook
+      cc1101_id: cc1101_1
+      data_pin: GPIO5
+      carrier_sense_pin: GPIO10
+      on_decode:
+        - homeassistant.event:
+            event: esphome.rtl_433
+            data:
+              json: !lambda return x;
