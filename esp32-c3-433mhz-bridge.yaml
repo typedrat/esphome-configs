@@ -66,15 +66,18 @@ binary_sensor:
 
 sensor:
   - platform: wifi_signal
+    id: wifi_signal_db
     name: WiFi Signal
     update_interval: 60s
 
   - platform: uptime
+    id: uptime_s
     name: Uptime
 
 text_sensor:
   - platform: wifi_info
     ip_address:
+      id: ip_address
       name: IP Address
     ssid:
       name: Connected SSID
@@ -100,11 +103,39 @@ spi:
 # DISPLAY
 # =============================================================================
 
+globals:
+  - id: last_model
+    type: std::string
+    initial_value: '"none"'
+
+font:
+  - id: main_font
+    file:
+      type: gfonts
+      family: Golos Text
+    size: 12
+  - id: bold_font
+    file:
+      type: gfonts
+      family: Golos Text
+      weight: bold
+    size: 12
+
 display:
   - platform: ssd1306_i2c
     id: display_ssd1306_i2c_1
     i2c_id: i2c_1
     model: SSD1306_128X64
+    lambda: |-
+      it.print(0, 0, id(bold_font), "433 MHz bridge");
+      it.print(0, 16, id(main_font), id(ip_address).has_state() ? id(ip_address).state.c_str() : "no network");
+      if (id(uptime_s).has_state()) {
+        uint32_t up = id(uptime_s).state;
+        it.printf(0, 32, id(main_font), "Up %ud %02u:%02u", up / 86400, (up / 3600) % 24, (up / 60) % 60);
+      }
+      if (id(wifi_signal_db).has_state())
+        it.printf(127, 32, id(main_font), TextAlign::TOP_RIGHT, "%.0f dB", id(wifi_signal_db).state);
+      it.printf(0, 48, id(main_font), "RX: %s", id(last_model).c_str());
 
 # =============================================================================
 # RADIO
@@ -128,6 +159,14 @@ rtl_433:
       data_pin: GPIO5
       carrier_sense_pin: GPIO10
       on_decode:
+        # The display only needs the model, so pull it out of the JSON rather than parse it all.
+        - lambda: |-
+            const std::string key = "\"model\":\"";
+            auto start = x.find(key);
+            if (start != std::string::npos) {
+              start += key.size();
+              id(last_model) = x.substr(start, x.find('"', start) - start);
+            }
         - homeassistant.event:
             event: esphome.rtl_433
             data:
